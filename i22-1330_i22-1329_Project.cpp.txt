@@ -1,0 +1,597 @@
+#include <fstream>
+#include <string>
+#include <iostream>
+#include <sstream>
+using namespace std;
+
+const int MAX_BOOKS = 100;
+const int MAX_USERS = 100;
+const string PREDEFINED_GENRES[] = { "Love", "Fantasy", "Non fiction", "Mystery", "Poetry", "Drama" };
+
+struct Book {
+    int book_id;
+    string title;
+    string author;
+    string genre;
+    double rating;
+
+    Book(int id = 0, const string& t = "", const string& a = "", const string& g = "", double r = 0.0)
+        : book_id(id), title(t), author(a), genre(g), rating(r) {}
+
+    bool operator==(const Book& other) const {
+        return book_id == other.book_id;
+    }
+};
+
+
+struct UserProfile {
+    string user_id;
+    string reading_history[MAX_BOOKS];
+    string preferences[MAX_BOOKS];
+    double book_ratings[MAX_BOOKS]; // Store ratings for books
+    int history_count = 0;
+    int preferences_count = 0;
+
+    UserProfile(const string& id = "") : user_id(id) {
+        fill_n(book_ratings, MAX_BOOKS, -1.0); // Initialize ratings to -1 (indicating no rating)
+    }
+};
+
+// Adjacency list to store co-occurrences of books
+int adj_list[MAX_BOOKS][MAX_BOOKS] = { 0 }; // adj_list[i][j] indicates how often book i and book j are read together
+int books_count = 0;
+int users_count = 0;
+Book books_collection[MAX_BOOKS];
+UserProfile user_profiles[MAX_USERS];
+int next_book_id = 1;
+
+int find_book_index(int book_id) {
+    for (int i = 0; i < books_count; ++i) {
+        if (books_collection[i].book_id == book_id) {
+            return i;
+        }
+    }
+    return -1; // Return -1 if book is not found
+}
+
+
+void update_adjacency_list(const string& user_id) {
+    UserProfile* user = nullptr;
+    for (int i = 0; i < users_count; ++i) {
+        if (user_profiles[i].user_id == user_id) {
+            user = &user_profiles[i];
+            break;
+        }
+    }
+
+    if (!user) return; // User not found
+
+    for (int i = 0; i < user->history_count; ++i) {
+        for (int j = i + 1; j < user->history_count; ++j) {
+            int book_index_1 = find_book_index(stoi(user->reading_history[i]));
+            int book_index_2 = find_book_index(stoi(user->reading_history[j]));
+
+            if (book_index_1 != -1 && book_index_2 != -1) {
+                adj_list[book_index_1][book_index_2]++;
+                adj_list[book_index_2][book_index_1]++;
+            }
+        }
+    }
+}
+
+void sort_books_by_rating(Book books[], int count) {
+    for (int i = 0; i < count - 1; ++i) {
+        for (int j = 0; j < count - i - 1; ++j) {
+            if (books[j].rating < books[j + 1].rating) {
+                // Swap books[j] and books[j + 1]
+                Book temp = books[j];
+                books[j] = books[j + 1];
+                books[j + 1] = temp;
+            }
+        }
+    }
+}
+
+Book* content_based_recommendation(const string& user_id, int& count) {
+    UserProfile* user = nullptr;
+    static Book recommendations[MAX_BOOKS];
+    count = 0;
+
+    // Find the user profile
+    for (int i = 0; i < users_count; ++i) {
+        if (user_profiles[i].user_id == user_id) {
+            user = &user_profiles[i];
+            break;
+        }
+    }
+    if (!user) {
+        count = 0;
+        return nullptr;
+    }
+
+    // Find books matching user preferences and not in the user's reading history
+    for (int i = 0; i < books_count; ++i) {
+        const Book& book = books_collection[i];
+        bool in_history = false;
+        for (int j = 0; j < user->history_count; ++j) {
+            if (book.book_id == stoi(user->reading_history[j])) {
+                in_history = true;
+                break;
+            }
+        }
+        if (!in_history) {
+            for (int j = 0; j < user->preferences_count; ++j) {
+                if (book.genre == user->preferences[j]) {
+                    recommendations[count++] = book;
+                    break;
+                }
+            }
+        }
+    }
+
+    // Sort recommendations by rating in descending order
+    sort_books_by_rating(recommendations, count);
+
+    // Expand recommendations based on co-occurrence
+    for (int i = 0; i < count; ++i) {
+        int book_index = find_book_index(recommendations[i].book_id);
+        for (int j = 0; j < books_count; ++j) {
+            if (adj_list[book_index][j] > 0) {
+                // Add connected books to recommendations
+                bool already_in_recommendations = false;
+                for (int k = 0; k < count; ++k) {
+                    if (recommendations[k] == books_collection[j]) {
+                        already_in_recommendations = true;
+                        break;
+                    }
+                }
+                bool in_history = false;
+                for (int k = 0; k < user->history_count; ++k) {
+                    if (books_collection[j].book_id == stoi(user->reading_history[k])) {
+                        in_history = true;
+                        break;
+                    }
+                }
+                if (!already_in_recommendations && !in_history) {
+                    recommendations[count++] = books_collection[j];
+                }
+            }
+        }
+    }
+
+    // Sort recommendations again by rating
+    sort_books_by_rating(recommendations, count);
+
+    // Return top 10 recommendations
+    if (count > 10) count = 10;
+
+    return recommendations;
+}
+
+
+
+
+void read_books_from_file(const string& filename) {
+    ifstream file(filename);
+    if (file.is_open()) {
+        string line;
+        while (getline(file, line) && books_count < MAX_BOOKS) {
+            stringstream ss(line);
+            Book book;
+            ss >> book.book_id >> ws;
+            getline(ss, book.title, ',');
+            ss >> ws;
+            getline(ss, book.author, ',');
+            ss >> ws;
+            getline(ss, book.genre, ',');
+            ss >> book.rating;
+            if (!ss.fail()) {
+                books_collection[books_count++] = book;
+                if (book.book_id >= next_book_id) {
+                    next_book_id = book.book_id + 1;
+                }
+            }
+        }
+        file.close();
+    }
+    else {
+        cout << "Unable to open file " << filename << endl;
+    }
+}
+
+void write_books_to_file(const string& filename) {
+    ofstream file(filename);
+    if (file.is_open()) {
+        for (int i = 0; i < books_count; ++i) {
+            file << books_collection[i].book_id << " "
+                << books_collection[i].title << ", "
+                << books_collection[i].author << ", "
+                << books_collection[i].genre << ", "
+                << books_collection[i].rating << endl;
+        }
+        file.close();
+    }
+    else {
+        cout << "Unable to open file " << filename << endl;
+    }
+}
+
+void read_users_from_file(const string& filename) {
+    ifstream file(filename);
+    if (file.is_open()) {
+        while (!file.eof() && users_count < MAX_USERS) {
+            UserProfile user;
+            file >> user.user_id >> user.history_count >> user.preferences_count;
+            for (int i = 0; i < user.history_count; ++i) {
+                file >> user.reading_history[i];
+            }
+            for (int i = 0; i < user.preferences_count; ++i) {
+                file >> user.preferences[i];
+            }
+            for (int i = 0; i < user.history_count; ++i) {
+                file >> user.book_ratings[i];
+            }
+            if (!file.fail()) {
+                user_profiles[users_count++] = user;
+            }
+        }
+        file.close();
+    }
+    else {
+        cout << "Unable to open file " << filename << endl;
+    }
+}
+
+void write_users_to_file(const string& filename) {
+    ofstream file(filename);
+    if (file.is_open()) {
+        for (int i = 0; i < users_count; ++i) {
+            file << user_profiles[i].user_id << " "
+                << user_profiles[i].history_count << " "
+                << user_profiles[i].preferences_count;
+            for (int j = 0; j < user_profiles[i].history_count; ++j) {
+                file << " " << user_profiles[i].reading_history[j];
+            }
+            for (int j = 0; j < user_profiles[i].preferences_count; ++j) {
+                file << " " << user_profiles[i].preferences[j];
+            }
+            for (int j = 0; j < user_profiles[i].history_count; ++j) {
+                file << " " << user_profiles[i].book_ratings[j];
+            }
+            file << endl;
+        }
+        file.close();
+    }
+    else {
+        cout << "Unable to open file " << filename << endl;
+    }
+}
+
+
+void add_new_book(const string& filename) {
+    if (books_count < MAX_BOOKS) {
+        string title, author, genre;
+        double rating;
+
+        cout << "Enter title: ";
+        cin.ignore(); // To clear the newline character from the input buffer
+        getline(cin, title);
+        cout << "Enter author: ";
+        getline(cin, author);
+
+        cout << "Select genre:\n";
+        for (int i = 0; i < sizeof(PREDEFINED_GENRES) / sizeof(PREDEFINED_GENRES[0]); ++i) {
+            cout << i + 1 << ". " << PREDEFINED_GENRES[i] << endl;
+        }
+
+        int genre_choice;
+        do {
+            cout << "Enter your choice (1-" << sizeof(PREDEFINED_GENRES) / sizeof(PREDEFINED_GENRES[0]) << "): ";
+            cin >> genre_choice;
+            if (genre_choice < 1 || genre_choice > sizeof(PREDEFINED_GENRES) / sizeof(PREDEFINED_GENRES[0])) {
+                cout << "Invalid choice. Please try again.\n";
+            }
+        } while (genre_choice < 1 || genre_choice > sizeof(PREDEFINED_GENRES) / sizeof(PREDEFINED_GENRES[0]));
+
+        genre = PREDEFINED_GENRES[genre_choice - 1];
+
+        cout << "Enter rating: ";
+        cin >> rating;
+
+        Book new_book(next_book_id++, title, author, genre, rating);
+        books_collection[books_count++] = new_book;
+        write_books_to_file(filename);
+    }
+    else {
+        cout << "Book collection is full." << endl;
+    }
+}
+
+void display_books() {
+    for (int i = 0; i < books_count; ++i) {
+        const Book& book = books_collection[i];
+        cout << "Book ID: " << book.book_id << ", Title: " << book.title
+            << ", Author: " << book.author << ", Genre: " << book.genre
+            << ", Rating: " << book.rating << endl;
+    }
+}
+
+void add_new_user(const string& filename) {
+    if (users_count < MAX_USERS) {
+        int id = users_count;  // Automatically assign user ID based on the index
+        cout << "The id assigned to you is : " << id << ". Remember it for getting a recommendation." << endl;
+        int read;
+        int his = 0;
+
+        UserProfile new_user(to_string(id));
+        cout << "Enter number of books in reading history: ";
+        cin >> new_user.history_count;
+        cin.ignore();
+
+        cout << endl;
+
+        display_books();
+        cout << "How many of the above have you read? : ";
+        cin >> read;
+
+        if (read > 0) {
+            cout << "Type in ids of the books you have read from above. One at a time." << endl;
+        }
+
+        for (int i = 0; i < read; ++i, ++his) {
+            cout << "Enter book ID for history " << i + 1 << ": ";
+            cin >> new_user.reading_history[i];
+        }
+
+        int diff = new_user.history_count - read;
+
+        if (diff != 0) {
+            cout << "Add remaining new books into the system: " << endl;
+
+            for (int i = 0; i < diff; ++i) {
+                add_new_book(filename);
+                new_user.reading_history[his] = to_string(books_count);  // Use the book ID generated in add_new_book
+                his++;
+            }
+        }
+
+        cout << "Enter number of genre preferences: ";
+        cin >> new_user.preferences_count;
+        cin.ignore();
+
+        for (int i = 0; i < new_user.preferences_count; ++i) {
+            cout << "Select genre preference " << i + 1 << ":\n";
+            for (int j = 0; j < sizeof(PREDEFINED_GENRES) / sizeof(PREDEFINED_GENRES[0]); ++j) {
+                cout << j + 1 << ". " << PREDEFINED_GENRES[j] << endl;
+            }
+            int genre_choice;
+            do {
+                cout << "Enter your choice (1-" << sizeof(PREDEFINED_GENRES) / sizeof(PREDEFINED_GENRES[0]) << "): ";
+                cin >> genre_choice;
+                if (genre_choice < 1 || genre_choice > sizeof(PREDEFINED_GENRES) / sizeof(PREDEFINED_GENRES[0])) {
+                    cout << "Invalid choice. Please try again.\n";
+                }
+            } while (genre_choice < 1 || genre_choice > sizeof(PREDEFINED_GENRES) / sizeof(PREDEFINED_GENRES[0]));
+
+            new_user.preferences[i] = PREDEFINED_GENRES[genre_choice - 1];
+        }
+
+        user_profiles[users_count++] = new_user;
+        write_users_to_file(filename);
+    }
+    else {
+        cout << "User profile collection is full." << endl;
+    }
+}
+
+void display_users() {
+    for (int i = 0; i < users_count; ++i) {
+        const UserProfile& user = user_profiles[i];
+        cout << "User ID: " << user.user_id << ", Reading History: ";
+        for (int j = 0; j < user.history_count; ++j) {
+            cout << user.reading_history[j] << " ";
+        }
+        cout << ", Preferences: ";
+        for (int j = 0; j < user.preferences_count; ++j) {
+            cout << user.preferences[j] << " ";
+        }
+        cout << endl;
+    }
+}
+
+void add_book_to_history(const string& user_id, int book_id) {
+    UserProfile* user = nullptr;
+    for (int i = 0; i < users_count; ++i) {
+        if (user_profiles[i].user_id == user_id) {
+            user = &user_profiles[i];
+            break;
+        }
+    }
+
+    if (!user) {
+        cout << "User not found.\n";
+        return;
+    }
+
+    int book_index = find_book_index(book_id);
+    if (book_index == -1) {
+        cout << "Book with ID " << book_id << " does not exist in the system.\n";
+        return;
+    }
+
+    if (user->history_count < MAX_BOOKS) {
+        user->reading_history[user->history_count++] = to_string(book_id);
+        cout << "Book ID " << book_id << " added to user " << user_id << "'s reading history.\n";
+        write_users_to_file("users.txt"); // Update the users file
+    }
+    else {
+        cout << "User's reading history is full.\n";
+    }
+}
+
+void rate_book(const string& user_id, int book_id, double rating) {
+    // Find the user profile
+    UserProfile* user = nullptr;
+    for (int i = 0; i < users_count; ++i) {
+        if (user_profiles[i].user_id == user_id) {
+            user = &user_profiles[i];
+            break;
+        }
+    }
+
+    if (!user) {
+        cout << "User not found.\n";
+        return;
+    }
+
+    // Check if the book exists in the system
+    int book_index = find_book_index(book_id);
+    if (book_index == -1) {
+        cout << "Book with ID " << book_id << " does not exist in the system.\n";
+        return;
+    }
+
+    // Check if the user has already rated the book
+    for (int i = 0; i < user->history_count; ++i) {
+        if (stoi(user->reading_history[i]) == book_id) {
+            if (user->book_ratings[i] != -1.0) {
+                cout << "You have already rated this book.\n";
+                return;
+            }
+        }
+    }
+
+    // Add the book to the user's reading history if it's not already there
+    bool found = false;
+    for (int i = 0; i < user->history_count; ++i) {
+        if (stoi(user->reading_history[i]) == book_id) {
+            user->book_ratings[i] = rating;
+            found = true;
+            break;
+        }
+    }
+
+    if (!found) {
+        cout << "Book is not in user's reading history. Adding it.\n";
+        if (user->history_count < MAX_BOOKS) {
+            user->reading_history[user->history_count] = to_string(book_id);
+            user->book_ratings[user->history_count++] = rating;
+        }
+        else {
+            cout << "User's reading history is full.\n";
+            return;
+        }
+    }
+
+    // Update the book's average rating
+    double total_rating = 0;
+    int rating_count = 0;
+    for (int i = 0; i < users_count; ++i) {
+        for (int j = 0; j < user_profiles[i].history_count; ++j) {
+            if (stoi(user_profiles[i].reading_history[j]) == book_id && user_profiles[i].book_ratings[j] != -1.0) {
+                total_rating += user_profiles[i].book_ratings[j];
+                rating_count++;
+            }
+        }
+    }
+    books_collection[book_index].rating = (rating_count > 0) ? (total_rating / rating_count) : 0;
+
+    write_users_to_file("users.txt");
+    write_books_to_file("books.txt");
+    cout << "Rating updated successfully.\n";
+}
+
+
+void menu(const string& books_filename, const string& users_filename) {
+    int choice;
+    do {
+        cout << "Menu:\n";
+        cout << "1. Display all books\n";
+        cout << "2. Display all users\n";
+        cout << "3. Add a new book\n";
+        cout << "4. Add a new user\n";
+        cout << "5. Get book recommendations\n";
+        cout << "6. Add book to user's reading history\n";
+        cout << "7. Rate a book\n";
+        cout << "8. Exit\n";
+        cout << "Enter your choice: ";
+        cin >> choice;
+        cin.ignore(); // To ignore the newline character left in the input buffer
+
+        switch (choice) {
+        case 1:
+            display_books();
+            break;
+        case 2:
+            display_users();
+            break;
+        case 3:
+            add_new_book(books_filename);
+            break;
+        case 4:
+            add_new_user(users_filename);
+            break;
+        case 5: {
+            string user_id;
+            cout << "Enter user ID: ";
+            getline(cin, user_id);
+
+            update_adjacency_list(user_id);
+
+            int count;
+            Book* recommendations = content_based_recommendation(user_id, count);
+
+            for (int i = 0; i < count; ++i) {
+                const Book& book = recommendations[i];
+                cout << "Recommended Book: " << book.title << " by " << book.author << endl;
+            }
+            break;
+        }
+        case 6: {
+            string user_id;
+            int book_id;
+            cout << "Enter user ID: ";
+            getline(cin, user_id);
+            cout << "Enter book ID: ";
+            cin >> book_id;
+
+            add_book_to_history(user_id, book_id);
+            break;
+        }
+        case 7: {
+            string user_id;
+            int book_id;
+            double rating;
+            cout << "Enter user ID: ";
+            getline(cin, user_id);
+            cout << "Enter book ID: ";
+            cin >> book_id;
+            cout << "Enter rating (0.0 - 5.0): ";
+            cin >> rating;
+
+            rate_book(user_id, book_id, rating);
+            break;
+        }
+        case 8:
+            cout << "Exiting program.\n";
+            break;
+        default:
+            cout << "Invalid choice. Please try again.\n";
+            break;
+        }
+    } while (choice != 8);
+}
+
+
+int main() {
+    const string books_filename = "books.txt";
+    const string users_filename = "users.txt";
+
+    read_books_from_file(books_filename);
+    read_users_from_file(users_filename);
+
+    menu(books_filename, users_filename);
+
+    return 0;
+}
+
